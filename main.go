@@ -108,7 +108,7 @@ func main() {
 
 	// Read the commandline
 	flagDebugOn := getopt.BoolLong("debug", 'd', "log debugging information")
-	flagConfigFile := getopt.StringLong("config", 'c', "", "full path to config file", "config.toml")
+	flagConfigFile := getopt.StringLong("config", 'c', "pg_tileserv.toml", "full path to config file", "config.toml")
 	flagHelpOn := getopt.BoolLong("help", 'h', "display help output")
 	flagVersionOn := getopt.BoolLong("version", 'v', "display version number")
 	flagHidePreview := getopt.BoolLong("no-preview", 'n', "hide web interface")
