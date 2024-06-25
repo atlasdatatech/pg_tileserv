@@ -15,47 +15,46 @@ import (
 	"github.com/jackc/pgtype"
 
 	// Logging
-	log "github.com/sirupsen/logrus"
 
 	// Configuration
 	"github.com/spf13/viper"
 )
 
-// LayerTable provides metadata about the table layer
-type LayerTable struct {
+// LayerRaster provides metadata about the table layer
+type LayerRaster struct {
 	ID             string
 	Schema         string
 	Table          string
 	Description    string
-	Properties     map[string]TableProperty
+	Properties     map[string]RasterProperty
 	GeometryType   string
 	IDColumn       string
 	GeometryColumn string
 	Srid           int
 }
 
-// TableProperty provides metadata about a single property field,
+// RasterProperty provides metadata about a single property field,
 // features in a table layer may have multiple such fields
-type TableProperty struct {
+type RasterProperty struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
 	order       int
 }
 
-// TableDetailJSON gives the output structure for the table layer.
-type TableDetailJSON struct {
-	ID           string          `json:"id"`
-	Schema       string          `json:"schema"`
-	Name         string          `json:"name"`
-	Description  string          `json:"description,omitempty"`
-	Properties   []TableProperty `json:"properties,omitempty"`
-	GeometryType string          `json:"geometrytype,omitempty"`
-	Center       [2]float64      `json:"center"`
-	Bounds       [4]float64      `json:"bounds"`
-	MinZoom      int             `json:"minzoom"`
-	MaxZoom      int             `json:"maxzoom"`
-	TileURL      string          `json:"tileurl"`
+// RasterDetailJSON gives the output structure for the table layer.
+type RasterDetailJSON struct {
+	ID           string           `json:"id"`
+	Schema       string           `json:"schema"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description,omitempty"`
+	Properties   []RasterProperty `json:"properties,omitempty"`
+	GeometryType string           `json:"geometrytype,omitempty"`
+	Center       [2]float64       `json:"center"`
+	Bounds       [4]float64       `json:"bounds"`
+	MinZoom      int              `json:"minzoom"`
+	MaxZoom      int              `json:"maxzoom"`
+	TileURL      string           `json:"tileurl"`
 }
 
 /********************************************************************************
@@ -63,34 +62,34 @@ type TableDetailJSON struct {
  */
 
 // GetType disambiguates between function and table layers
-func (lyr LayerTable) GetType() LayerType {
-	return LayerTypeTable
+func (lyr LayerRaster) GetType() LayerType {
+	return LayerTypeRaster
 }
 
 // GetID returns the complete ID (schema.name) by which to reference a given layer
-func (lyr LayerTable) GetID() string {
+func (lyr LayerRaster) GetID() string {
 	return lyr.ID
 }
 
 // GetDescription returns the text description for a layer
 // or an empty string if no description is set
-func (lyr LayerTable) GetDescription() string {
+func (lyr LayerRaster) GetDescription() string {
 	return lyr.Description
 }
 
 // GetName returns just the name of a given layer
-func (lyr LayerTable) GetName() string {
+func (lyr LayerRaster) GetName() string {
 	return lyr.Table
 }
 
 // GetSchema returns just the schema for a given layer
-func (lyr LayerTable) GetSchema() string {
+func (lyr LayerRaster) GetSchema() string {
 	return lyr.Schema
 }
 
 // WriteLayerJSON outputs parameters and optional arguments for the table layer
-func (lyr LayerTable) WriteLayerJSON(w http.ResponseWriter, req *http.Request) error {
-	jsonTableDetail, err := lyr.getTableDetailJSON(req)
+func (lyr LayerRaster) WriteLayerJSON(w http.ResponseWriter, req *http.Request) error {
+	jsonTableDetail, err := lyr.getRasterDetailJSON(req)
 	if err != nil {
 		return err
 	}
@@ -102,9 +101,15 @@ func (lyr LayerTable) WriteLayerJSON(w http.ResponseWriter, req *http.Request) e
 
 // GetTileRequest takes tile and request parameters as input and returns a TileRequest
 // specifying the SQL to fetch appropriate data
-func (lyr LayerTable) GetTileRequest(tile Tile, r *http.Request) TileRequest {
-	rp := lyr.getQueryParameters(r.URL.Query())
-	sql, _ := lyr.requestSQL(&tile, &rp)
+func (lyr LayerRaster) GetTileRequest(tile Tile, r *http.Request) TileRequest {
+
+	// flip y to match the spec
+	y := (1 << tile.Zoom) - 1 - tile.Y
+	sql := fmt.Sprintf(`SELECT tile_data FROM "%s"."%s" 
+						WHERE zoom_level = %d AND 
+						tile_column = %d AND 
+						tile_row = %d;`, lyr.Schema, lyr.Table, tile.Zoom, tile.X, y)
+
 	tr := TileRequest{
 		LayerID: lyr.ID,
 		Tile:    tile,
@@ -116,50 +121,11 @@ func (lyr LayerTable) GetTileRequest(tile Tile, r *http.Request) TileRequest {
 
 /********************************************************************************/
 
-type queryParameters struct {
-	Limit      int
-	Properties []string
-	Resolution int
-	Buffer     int
-	Filter     string
-	FilterCrs  int
-}
-
-// getRequestIntParameter ignores missing parameters and non-integer parameters,
-// returning the "unknown integer" value for this case, which is -1
-func getQueryIntParameter(q url.Values, param string) int {
-	ok := false
-	sParam := make([]string, 0)
-
-	for k, v := range q {
-		if strings.EqualFold(k, param) {
-			sParam = v
-			ok = true
-			break
-		}
-	}
-	if ok {
-		iParam, err := strconv.Atoi(sParam[0])
-		if err == nil {
-			return iParam
-		}
-	}
-	return -1
-}
-
-func getQueryStringParameter(q url.Values, param string) string {
-	vals := q[param]
-	if vals != nil {
-		return vals[0]
-	}
-	return ""
-}
-
 // getRequestPropertiesParameter compares the properties in the request
 // with the properties in the table layer, and returns a slice of
 // just those that occur in both, or a slice of all table properties
 // if there is not query parameter, or no matches
-func (lyr *LayerTable) getQueryPropertiesParameter(q url.Values) []string {
+func (lyr *LayerRaster) getQueryPropertiesParameter(q url.Values) []string {
 	sAtts := make([]string, 0)
 	haveProperties := false
 
@@ -207,7 +173,7 @@ func (lyr *LayerTable) getQueryPropertiesParameter(q url.Values) []string {
 // getRequestParameters reads user-settables parameters
 // from the request URL, or uses the system defaults
 // if the parameters are not set
-func (lyr *LayerTable) getQueryParameters(q url.Values) queryParameters {
+func (lyr *LayerRaster) getQueryParameters(q url.Values) queryParameters {
 	rp := queryParameters{
 		Limit:      getQueryIntParameter(q, "limit"),
 		Resolution: getQueryIntParameter(q, "resolution"),
@@ -233,8 +199,8 @@ func (lyr *LayerTable) getQueryParameters(q url.Values) queryParameters {
 
 /********************************************************************************/
 
-func (lyr *LayerTable) getTableDetailJSON(req *http.Request) (TableDetailJSON, error) {
-	td := TableDetailJSON{
+func (lyr *LayerRaster) getRasterDetailJSON(req *http.Request) (RasterDetailJSON, error) {
+	td := RasterDetailJSON{
 		ID:           lyr.ID,
 		Schema:       lyr.Schema,
 		Name:         lyr.Table,
@@ -244,11 +210,11 @@ func (lyr *LayerTable) getTableDetailJSON(req *http.Request) (TableDetailJSON, e
 		MaxZoom:      viper.GetInt("DefaultMaxZoom"),
 	}
 	// TileURL is relative to server base
-	td.TileURL = fmt.Sprintf("%s/%s/{z}/{x}/{y}.pbf", serverURLBase(req), url.PathEscape(lyr.ID))
+	td.TileURL = fmt.Sprintf("%s/%s/{z}/{x}/{y}.jpg", serverURLBase(req), url.PathEscape(lyr.ID))
 
 	// Want to add the properties to the Json representation
 	// in table order, which is fiddly
-	tmpMap := make(map[int]TableProperty)
+	tmpMap := make(map[int]RasterProperty)
 	tmpKeys := make([]int, 0, len(lyr.Properties))
 	for _, v := range lyr.Properties {
 		tmpMap[v.order] = v
@@ -276,7 +242,7 @@ func (lyr *LayerTable) getTableDetailJSON(req *http.Request) (TableDetailJSON, e
 
 // GetBoundsExact returns the data coverage extent for a table layer
 // in EPSG:4326, clipped to (+/-180, +/-90)
-func (lyr *LayerTable) GetBoundsExact() (Bounds, error) {
+func (lyr *LayerRaster) GetBoundsExact() (Bounds, error) {
 	bounds := Bounds{}
 	extentSQL := fmt.Sprintf(`
 	WITH ext AS (
@@ -323,60 +289,59 @@ func (lyr *LayerTable) GetBoundsExact() (Bounds, error) {
 }
 
 // GetBounds returns the estimated extent for a table layer, transformed to EPSG:4326
-func (lyr *LayerTable) GetBounds() (Bounds, error) {
+func (lyr *LayerRaster) GetBounds() (Bounds, error) {
 	bounds := Bounds{}
-	extentSQL := fmt.Sprintf(`
-		WITH ext AS (
-			SELECT ST_Transform(ST_SetSRID(ST_EstimatedExtent('%s', '%s', '%s'), %d), 4326) AS geom
-		)
-		SELECT
-			ST_XMin(ext.geom) AS xmin,
-			ST_YMin(ext.geom) AS ymin,
-			ST_XMax(ext.geom) AS xmax,
-			ST_YMax(ext.geom) AS ymax
-		FROM ext
-		`, lyr.Schema, lyr.Table, lyr.GeometryColumn, lyr.Srid)
+	// extentSQL := fmt.Sprintf(`
+	// 	WITH ext AS (
+	// 		SELECT ST_Transform(ST_SetSRID(ST_EstimatedExtent('%s', '%s', '%s'), %d), 4326) AS geom
+	// 	)
+	// 	SELECT
+	// 		ST_XMin(ext.geom) AS xmin,
+	// 		ST_YMin(ext.geom) AS ymin,
+	// 		ST_XMax(ext.geom) AS xmax,
+	// 		ST_YMax(ext.geom) AS ymax
+	// 	FROM ext
+	// 	`, lyr.Schema, lyr.Table, lyr.GeometryColumn, lyr.Srid)
 
-	db, err := dbConnect()
-	if err != nil {
-		return bounds, err
-	}
+	// db, err := dbConnect()
+	// if err != nil {
+	// 	return bounds, err
+	// }
 
-	var (
-		xmin pgtype.Float8
-		xmax pgtype.Float8
-		ymin pgtype.Float8
-		ymax pgtype.Float8
-	)
-	err = db.QueryRow(context.Background(), extentSQL).Scan(&xmin, &ymin, &xmax, &ymax)
-	if err != nil {
-		return bounds, tileAppError{
-			SrcErr:  err,
-			Message: "Unable to calculate table bounds",
-		}
-	}
+	// var (
+	// 	xmin pgtype.Float8
+	// 	xmax pgtype.Float8
+	// 	ymin pgtype.Float8
+	// 	ymax pgtype.Float8
+	// )
+	// err = db.QueryRow(context.Background(), extentSQL).Scan(&xmin, &ymin, &xmax, &ymax)
+	// if err != nil {
+	// 	return bounds, tileAppError{
+	// 		SrcErr:  err,
+	// 		Message: "Unable to calculate table bounds",
+	// 	}
+	// }
 
-	// Failed to get estimate? Get the exact bounds.
-	if xmin.Status == pgtype.Null {
-		warning := fmt.Sprintf("Estimated extent query failed, run 'ANALYZE %s.%s'", lyr.Schema, lyr.Table)
-		log.WithFields(log.Fields{
-			"event": "request",
-			"topic": "detail",
-			"key":   warning,
-		}).Warn(warning)
-		return lyr.GetBoundsExact()
-	}
-
+	// // Failed to get estimate? Get the exact bounds.
+	// if xmin.Status == pgtype.Null {
+	// 	warning := fmt.Sprintf("Estimated extent query failed, run 'ANALYZE %s.%s'", lyr.Schema, lyr.Table)
+	// 	log.WithFields(log.Fields{
+	// 		"event": "request",
+	// 		"topic": "detail",
+	// 		"key":   warning,
+	// 	}).Warn(warning)
+	// 	return lyr.GetBoundsExact()
+	// }
 	bounds.SRID = 4326
-	bounds.Xmin = xmin.Float
-	bounds.Ymin = ymin.Float
-	bounds.Xmax = xmax.Float
-	bounds.Ymax = ymax.Float
+	bounds.Xmin = -180
+	bounds.Ymin = -90
+	bounds.Xmax = 180
+	bounds.Ymax = 90
 	bounds.sanitize()
 	return bounds, nil
 }
 
-func (lyr *LayerTable) requestSQL(tile *Tile, qp *queryParameters) (string, error) {
+func (lyr *LayerRaster) requestSQL(tile *Tile, qp *queryParameters) (string, error) {
 
 	type sqlParameters struct {
 		TileSQL        string
@@ -406,7 +371,6 @@ func (lyr *LayerTable) requestSQL(tile *Tile, qp *queryParameters) (string, erro
 	if err != nil {
 		return "", err
 	}
-
 	// SRID of the tile we are going to generate, which might be different
 	// from the layer SRID in the database
 	tileSrid := tile.Bounds.SRID
@@ -479,7 +443,7 @@ func (lyr *LayerTable) requestSQL(tile *Tile, qp *queryParameters) (string, erro
 	return sql, err
 }
 
-func (lyr *LayerTable) filterSQL(qp *queryParameters) (string, error) {
+func (lyr *LayerRaster) filterSQL(qp *queryParameters) (string, error) {
 	//filter := "pop_est < 2000000"
 	filter := qp.Filter
 	sql, err := cql.TranspileToSQL(filter, qp.FilterCrs, lyr.Srid)
@@ -492,42 +456,45 @@ func (lyr *LayerTable) filterSQL(qp *queryParameters) (string, error) {
 	return sql, nil
 }
 
-func getTableLayers() ([]LayerTable, error) {
+func getRasterLayers() ([]LayerRaster, error) {
+
+	// layerSQL := `
+	// SELECT
+	// 	Format('public.%s', tablename) AS id,
+	// 	'public' AS schema,
+	// 	tablename AS table,
+	// 	'description' AS description,
+	// 	'geom' AS geometry_column,
+	// 	4326 as srid,
+	// 	'raster' AS geometry_type,
+	// 	'xyz' AS id_column,
+	// 	'{{zoom_level,int4,"",1},{tile_column,int4,"",2},{tile_row,int4,"",3},{tile_data,bytea,"",4}}' AS props
+	// FROM pg_tables WHERE
+	// 	schemaname = 'public' AND
+	// 	tablename NOT LIKE 'pg_%' AND
+	// 	tablename NOT LIKE 'sql_%';
+	// `
 
 	layerSQL := `
 	SELECT
-		Format('%s.%s', n.nspname, c.relname) AS id,
-		n.nspname AS schema,
-		c.relname AS table,
-		coalesce(d.description, '') AS description,
-		a.attname AS geometry_column,
-		postgis_typmod_srid(a.atttypmod) AS srid,
-		trim(trailing 'ZM' from postgis_typmod_type(a.atttypmod)) AS geometry_type,
-		coalesce(case when it.typname is not null then ia.attname else null end, '') AS id_column,
-		(
-			SELECT array_agg(ARRAY[sa.attname, st.typname, coalesce(da.description,''), sa.attnum::text]::text[] ORDER BY sa.attnum)
-			FROM pg_attribute sa
-			JOIN pg_type st ON sa.atttypid = st.oid
-			LEFT JOIN pg_description da ON (c.oid = da.objoid and sa.attnum = da.objsubid)
-			WHERE sa.attrelid = c.oid
-			AND sa.attnum > 0
-			AND NOT sa.attisdropped
-			AND st.typname NOT IN ('geometry', 'geography')
-		) AS props
-	FROM pg_class c
-	JOIN pg_namespace n ON (c.relnamespace = n.oid)
-	JOIN pg_attribute a ON (a.attrelid = c.oid)
-	JOIN pg_type t ON (a.atttypid = t.oid)
-	LEFT JOIN pg_description d ON (c.oid = d.objoid and d.objsubid = 0)
-	LEFT JOIN pg_index i ON (c.oid = i.indrelid AND i.indisprimary AND i.indnatts = 1)
-	LEFT JOIN pg_attribute ia ON (ia.attrelid = i.indexrelid)
-	LEFT JOIN pg_type it ON (ia.atttypid = it.oid AND it.typname in ('int2', 'int4', 'int8'))
-	WHERE c.relkind IN ('r', 'v', 'm', 'p', 'f')
-		AND t.typname = 'geometry'
-		AND has_table_privilege(c.oid, 'select')
-		AND has_schema_privilege(n.oid, 'usage')
-		AND postgis_typmod_srid(a.atttypmod) > 0
-	ORDER BY 1
+		Format ( 'public.%s', "table_name" ) AS ID,
+		'public' AS SCHEMA,
+		"table_name" AS TABLE,
+		'description' AS description,
+		'geom' AS geometry_column,
+		4326 AS srid,
+		'raster' AS geometry_type,
+		'xyz' AS id_column,
+		'{{zoom_level,int4,"",1},{tile_column,int4,"",2},{tile_row,int4,"",3},{tile_data,bytea,"",4}}' AS props 
+	FROM
+		information_schema.COLUMNS 
+	WHERE
+		table_schema = 'public' 
+		AND COLUMN_NAME IN ( 'zoom_level', 'tile_column', 'tile_row', 'tile_data' ) 
+	GROUP BY
+		"table_name" 
+	HAVING
+		COUNT ( * ) = 4;
 	`
 
 	db, connerr := dbConnect()
@@ -541,7 +508,7 @@ func getTableLayers() ([]LayerTable, error) {
 	}
 
 	// Reset array of layers
-	layerTables := make([]LayerTable, 0)
+	layerTables := make([]LayerRaster, 0)
 	for rows.Next() {
 
 		var (
@@ -563,7 +530,7 @@ func getTableLayers() ([]LayerTable, error) {
 		// pgx TextArray type, but it is at least native handling of
 		// the array. It's complex because of PgSQL ARRAY generality
 		// really, no fault of pgx
-		properties := make(map[string]TableProperty)
+		properties := make(map[string]RasterProperty)
 
 		if atts.Status == pgtype.Present {
 			arrLen := atts.Dimensions[0].Length
@@ -572,7 +539,7 @@ func getTableLayers() ([]LayerTable, error) {
 			for i := arrStart; i < arrLen; i++ {
 				pos := i * elmLen
 				elmID := atts.Elements[pos].String
-				elm := TableProperty{
+				elm := RasterProperty{
 					Name:        elmID,
 					Type:        atts.Elements[pos+1].String,
 					Description: atts.Elements[pos+2].String,
@@ -583,7 +550,7 @@ func getTableLayers() ([]LayerTable, error) {
 		}
 
 		// "schema.tablename" is our unique key for table layers
-		lyr := LayerTable{
+		lyr := LayerRaster{
 			ID:             id,
 			Schema:         schema,
 			Table:          table,

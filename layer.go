@@ -15,6 +15,8 @@ const (
 	LayerTypeTable = 1
 	// LayerTypeFunction is a function layer
 	LayerTypeFunction = 2
+	// LayerTypeRaster is a raster layer
+	LayerTypeRaster = 3
 )
 
 func (lt LayerType) String() string {
@@ -23,6 +25,8 @@ func (lt LayerType) String() string {
 		return "table"
 	case LayerTypeFunction:
 		return "function"
+	case LayerTypeRaster:
+		return "raster"
 	default:
 		return "unknown"
 	}
@@ -71,6 +75,10 @@ func loadLayers() error {
 	if errFl != nil {
 		return errFl
 	}
+	rasterLayers, errRl := getRasterLayers()
+	if errRl != nil {
+		return errRl
+	}
 	// Empty the global layer map
 	globalLayersMutex.Lock()
 	globalLayers = make(map[string]Layer)
@@ -79,6 +87,12 @@ func loadLayers() error {
 	}
 	for _, lyr := range functionLayers {
 		globalLayers[lyr.GetID()] = lyr
+	}
+	for _, lyr := range rasterLayers {
+		_, has := globalLayers[lyr.GetID()]
+		if !has {
+			globalLayers[lyr.GetID()] = lyr
+		}
 	}
 	globalLayersMutex.Unlock()
 

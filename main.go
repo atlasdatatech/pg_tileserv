@@ -256,6 +256,13 @@ func requestPreview(w http.ResponseWriter, r *http.Request) error {
 		}
 		l, _ := lyr.(LayerFunction)
 		tmpl.Execute(w, l)
+	case LayerRaster:
+		tmpl, err := template.ParseFiles(fmt.Sprintf("%s/preview-raster.html", viper.GetString("AssetsPath")))
+		if err != nil {
+			return err
+		}
+		l, _ := lyr.(LayerRaster)
+		tmpl.Execute(w, l)
 	default:
 		return errors.New("unknown layer type") // never get here
 	}
@@ -336,7 +343,6 @@ func requestDetailJSON(w http.ResponseWriter, r *http.Request) error {
 // requestTile handles a tile request for a given layer
 func requestTile(r *http.Request, source string) ([]byte, error) {
 	vars := mux.Vars(r)
-
 	lyr, err := getLayer(source)
 	if err != nil {
 		errLyr := tileAppError{
@@ -361,6 +367,7 @@ func requestTile(r *http.Request, source string) ([]byte, error) {
 	defer cancel()
 
 	tilerequest := lyr.GetTileRequest(tile, r)
+
 	mvt, errMvt := dBTileRequest(ctx, &tilerequest)
 	if errMvt != nil {
 		return nil, errMvt
