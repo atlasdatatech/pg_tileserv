@@ -17,6 +17,8 @@ const (
 	LayerTypeFunction = 2
 	// LayerTypeRaster is a raster layer
 	LayerTypeRaster = 3
+	// LayerTypeVector is a raster layer
+	LayerTypeVector = 4
 )
 
 func (lt LayerType) String() string {
@@ -27,6 +29,8 @@ func (lt LayerType) String() string {
 		return "function"
 	case LayerTypeRaster:
 		return "raster"
+	case LayerTypeVector:
+		return "vector"
 	default:
 		return "unknown"
 	}
@@ -59,7 +63,7 @@ func getLayer(lyrID string) (Layer, error) {
 	if ok {
 		return lyr, nil
 	}
-	return lyr, fmt.Errorf("Unable to get layer '%s'", lyrID)
+	return lyr, fmt.Errorf("unable to get layer '%s'", lyrID)
 }
 
 func loadLayers() error {
@@ -79,6 +83,10 @@ func loadLayers() error {
 	if errRl != nil {
 		return errRl
 	}
+	vectorLayers, errRl := getVectorLayers()
+	if errRl != nil {
+		return errRl
+	}
 	// Empty the global layer map
 	globalLayersMutex.Lock()
 	globalLayers = make(map[string]Layer)
@@ -89,10 +97,10 @@ func loadLayers() error {
 		globalLayers[lyr.GetID()] = lyr
 	}
 	for _, lyr := range rasterLayers {
-		_, has := globalLayers[lyr.GetID()]
-		if !has {
-			globalLayers[lyr.GetID()] = lyr
-		}
+		globalLayers[lyr.GetID()] = lyr
+	}
+	for _, lyr := range vectorLayers {
+		globalLayers[lyr.GetID()] = lyr
 	}
 	globalLayersMutex.Unlock()
 

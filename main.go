@@ -263,6 +263,13 @@ func requestPreview(w http.ResponseWriter, r *http.Request) error {
 		}
 		l, _ := lyr.(LayerRaster)
 		tmpl.Execute(w, l)
+	case LayerVector:
+		tmpl, err := template.ParseFiles(fmt.Sprintf("%s/preview-vector.html", viper.GetString("AssetsPath")))
+		if err != nil {
+			return err
+		}
+		l, _ := lyr.(LayerVector)
+		tmpl.Execute(w, l)
 	default:
 		return errors.New("unknown layer type") // never get here
 	}
@@ -395,8 +402,14 @@ func requestTiles(w http.ResponseWriter, r *http.Request) error {
 			log.Debugf("Skipping duplicate layer %s in request %s", source, sources)
 		}
 	}
-
-	w.Header().Add("Content-Type", "application/vnd.mapbox-vector-tile")
+	ext := vars["ext"]
+	if ext == "pbf" {
+		w.Header().Add("Content-Type", "application/vnd.mapbox-vector-tile")
+		name := vars["name"]
+		if strings.Contains(name, "vector.") {
+			w.Header().Add("Content-Encoding", "gzip")
+		}
+	}
 
 	if _, errWrite := w.Write(layers); errWrite != nil {
 		return errWrite

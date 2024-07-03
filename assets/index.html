@@ -53,6 +53,18 @@
   {{ end }}
   {{ end }}
   </ul>
+
+  <h2>Vector Layers</h2>
+  <ul>
+  {{ range $key, $value := . }}
+  {{ if eq $value.Type "vector" }}
+  <li>
+    <strong class="layer-name">{{ $value.ID }}</strong> (<a href='{{ $value.DetailURL | replace ".json" ".html"}}'>preview</a> | <a href="{{ $value.DetailURL }}">json</a>)
+    {{ if $value.Description }}<br/><span class="layer-description">{{ $value.Description }}</span> {{ end }}
+  </li>
+  {{ end }}
+  {{ end }}
+  </ul>
 </div>
 </body>
 </html>
