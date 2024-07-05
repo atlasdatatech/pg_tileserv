@@ -524,6 +524,9 @@ func tileRouter() *mux.Router {
 	}
 
 	r.Handle(viper.GetString("HealthEndpoint"), tileAppHandler(healthCheck)).Methods(http.MethodGet)
+	staticDir := viper.GetString("AssetsPath")
+	staticFS := http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir)))
+	r.PathPrefix("/static/").Handler(staticFS)
 	return r
 }
 
